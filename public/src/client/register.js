@@ -110,9 +110,40 @@ define('forum/register', [
 			});
 		});
 
-		// Set initial focus
 		$('#username').trigger('focus');
 	};
+
+	async function isUsernameAvailable(name) {
+		const slug = slugify(name);
+	
+		const results = await Promise.allSettled([
+			api.head(`/users/bySlug/${slug}`, {}),
+			api.head(`/groups/${name}`, {}),
+		]);
+	
+		return results.every(obj => obj.status === 'rejected');
+	}
+	
+	function suggestedUsername(baseSlug) {
+		const candidates = [];
+		for (let i = 1; i <= 20; i += 1) {
+			candidates.push(`${baseSlug}${i}`);
+		}
+	
+		const checks = candidates.map((candidate) => isUsernameAvailable(candidate));
+	
+		return Promise.all(checks).then((results) => {
+			const index = results.findIndex((available) => available);
+	
+			if (index === -1) {
+				return null;
+			}
+	
+			return candidates[index];
+		});
+	}
+	
+	
 
 	function validateUsername(username, callback) {
 		callback = callback || function () {};
@@ -128,20 +159,41 @@ define('forum/register', [
 		} else if (!utils.isUserNameValid(username) || !userslug) {
 			showError(usernameInput, username_notify, '[[error:invalid-username]]');
 		} else {
-			Promise.allSettled([
-				api.head(`/users/bySlug/${userslug}`, {}),
-				api.head(`/groups/${username}`, {}),
-			]).then((results) => {
-				if (results.every(obj => obj.status === 'rejected')) {
-					showSuccess(usernameInput, username_notify, successIcon);
-				} else {
-					showError(usernameInput, username_notify, '[[error:username-taken]]');
+			(async () => {
+				try {
+					const available = await isUsernameAvailable(username);
+		
+					if (available) {
+						showSuccess(usernameInput, username_notify, successIcon);
+					} else {
+						const suggestion = await suggestedUsername(userslug);
+		
+						if (suggestion) {
+							translator.translate('[[error:username-taken]]', config.defaultLang, function (takenMsg) {
+								translator.translate(`[[user:username-taken-workaround, ${suggestion}]]`, config.defaultLang, function (workaroundMsg) {
+									usernameInput.attr('aria-invalid', 'true');
+									username_notify.html(`${takenMsg}<br>${workaroundMsg}`);
+									username_notify.parent()
+										.removeClass('register-success')
+										.addClass('register-danger');
+									username_notify.show();
+								});
+							});
+							validationError = true;
+						} else {
+							showError(usernameInput, username_notify, '[[error:username-taken]]');
+						}
+					}
+				} catch (err) {
+					showError(usernameInput, username_notify, '[[error:invalid-data]]');
+				} finally {
+					callback();
 				}
-
-				callback();
-			});
+			})();
 		}
 	}
+		
+
 
 	function validatePassword(password, password_confirm) {
 		const passwordInput = $('#password');
